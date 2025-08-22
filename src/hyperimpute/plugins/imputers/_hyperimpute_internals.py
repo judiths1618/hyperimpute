@@ -913,8 +913,13 @@ class IterativeErrorCorrection(Serializable):
         return X
 
     @validate_arguments(config=dict(arbitrary_types_allowed=True))
-    def fit_transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        # Run imputation
+    def fit(self, X: pd.DataFrame):
+        """Train the imputation models on a dataset.
+
+        The fitting stage prepares the encoders, optimizes and trains a model for
+        each column and stores all the artefacts required at inference time.
+        """
+
         X = self._setup(X)
 
         Xt_init = self._initial_imputation(X)
@@ -922,6 +927,49 @@ class IterativeErrorCorrection(Serializable):
 
         Xt = Xt_init.copy()
 
-        Xt = self._fit_transform_inner_optimization(Xt)
+        self._fit_transform_inner_optimization(Xt)
+
+        return self
+
+    @validate_arguments(config=dict(arbitrary_types_allowed=True))
+    def _setup_inference(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Prepare a new dataset for inference using the fitted encoders.
+
+        Unlike :meth:`_setup`, this method does not reset the fitted models and
+        reuses the encoders learned during ``fit``.
+        """
+
+        X = pd.DataFrame(X).copy().reset_index(drop=True)
+        X.columns = X.columns.map(str)
+
+        for col, enc in self.encoders.items():
+            mask = X[col].notnull()
+            if mask.any():
+                X.loc[mask, col] = enc.transform(X.loc[mask, col]).astype(int)
+
+        self.mask = self._missing_indicator(X)
+        self.all_cols = X.columns
+
+        return X
+
+    @validate_arguments(config=dict(arbitrary_types_allowed=True))
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Impute a new dataset using the stored models."""
+
+        X = self._setup_inference(X)
+
+        Xt_init = self.baseline_imputer.transform(X)
+        Xt_init.columns = X.columns
+
+        Xt = Xt_init.copy()
+
+        cols = self._get_imputation_order()
+        for col in cols:
+            Xt = self._impute_single_column(Xt.copy(), col, False)
 
         return self._tear_down(Xt)
+
+    @validate_arguments(config=dict(arbitrary_types_allowed=True))
+    def fit_transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        # Convenience utility matching the scikit-learn API
+        return self.fit(X).transform(X)
