@@ -1,5 +1,5 @@
 # stdlib
-from typing import Any, List
+from typing import Any, List, Optional
 
 # third party
 from miracle import MIRACLE
@@ -65,6 +65,9 @@ class MiraclePlugin(base.ImputerPlugin):
         self.seed_imputation = seed_imputation
         self.random_state = random_state
 
+        self._model: Optional[MIRACLE] = None
+        self._seed_imputer: Optional[base.ImputerPlugin] = None
+
     @staticmethod
     def name() -> str:
         return "miracle"
@@ -92,12 +95,9 @@ class MiraclePlugin(base.ImputerPlugin):
             return MeanPlugin()
 
     def _fit(self, X: pd.DataFrame, *args: Any, **kwargs: Any) -> "MiraclePlugin":
-        return self
-
-    def _transform(self, X: pd.DataFrame) -> pd.DataFrame:
         missing_idxs = np.where(np.any(np.isnan(X.values), axis=0))[0]
 
-        _model = MIRACLE(
+        self._model = MIRACLE(
             num_inputs=X.shape[1],
             lr=self.lr,
             batch_size=self.batch_size,
@@ -113,10 +113,29 @@ class MiraclePlugin(base.ImputerPlugin):
             random_seed=self.random_state,
         )
 
-        seed_imputer = self._get_seed_imputer(self.seed_imputation)
-        X_seed = seed_imputer.fit_transform(X)
+        self._seed_imputer = self._get_seed_imputer(self.seed_imputation)
+        X_seed = self._seed_imputer.fit_transform(X)
 
-        return _model.fit(X.values, X_seed=X_seed.values)
+        # Train model; ignore returned imputed data
+        self._model.fit(X.values, X_seed=X_seed.values)
+        return self
+
+    def _transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        if self._model is None or self._seed_imputer is None:
+            raise RuntimeError("Model not fitted")
+
+        df_mask = pd.DataFrame(X)
+        df_mask = df_mask.where(df_mask.isnull(), 0)
+        df_mask = df_mask.mask(df_mask.isnull(), 1)
+        indicators = df_mask[df_mask.columns[df_mask.isin([1]).any()]].values
+        indicators = 1 - indicators
+
+        X_seed = self._seed_imputer.transform(X)
+        X_seed_c = np.concatenate([X_seed.values, indicators], axis=1)
+
+        transformed = self._model._transform(X_seed_c)
+        imputed = transformed[:, : X.shape[1]]
+        return pd.DataFrame(imputed, columns=X.columns)
 
     def save(self) -> bytes:
         return b""
