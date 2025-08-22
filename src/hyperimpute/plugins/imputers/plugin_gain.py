@@ -1,5 +1,5 @@
 # stdlib
-from typing import Any, List, Tuple, Union
+from typing import Any, List, Tuple, Union, Optional
 
 # third party
 import numpy as np
@@ -346,7 +346,7 @@ class GainPlugin(base.ImputerPlugin):
         self.hint_rate = hint_rate
         self.loss_alpha = loss_alpha
 
-        self._model = GainImputation()
+        self._model: Optional[GainImputation] = None
 
     @staticmethod
     def name() -> str:
@@ -363,13 +363,22 @@ class GainPlugin(base.ImputerPlugin):
 
     @decorators.benchmark
     def _fit(self, X: pd.DataFrame, *args: Any, **kwargs: Any) -> "GainPlugin":
+        X_t = torch.tensor(X.values).to(DEVICE)
+        self._model = GainImputation(
+            batch_size=self.batch_size,
+            n_epochs=self.n_epochs,
+            hint_rate=self.hint_rate,
+            loss_alpha=self.loss_alpha,
+        )
+        self._model.fit(X_t)
         return self
 
     @decorators.benchmark
     def _transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        X = torch.tensor(X.values).to(DEVICE)
-        self._model.fit(X)
-        return self._model.transform(X).detach().cpu().numpy()
+        if self._model is None:
+            raise RuntimeError("Fit the model first")
+        X_t = torch.tensor(X.values).to(DEVICE)
+        return self._model.transform(X_t).detach().cpu().numpy()
 
 
 plugin = GainPlugin
