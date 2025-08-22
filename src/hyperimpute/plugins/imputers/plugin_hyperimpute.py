@@ -122,10 +122,11 @@ class HyperImputePlugin(base.ImputerPlugin):
         return []
 
     def _fit(self, X: pd.DataFrame, *args: Any, **kwargs: Any) -> "HyperImputePlugin":
+        self.model.fit(X)
         return self
 
     def _transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        return self.model.fit_transform(X)
+        return self.model.transform(X)
 
     def models(self) -> dict:
         return self.model.models()
